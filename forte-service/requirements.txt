@@ -1,0 +1,8 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+opencv-python-headless==4.10.0.84
+numpy
+openpyxl            # только для python -m app.evaluate
+# Модель работает через Ollama (qwen3-vl:2b-instruct), torch не нужен.
+# Для варианта через transformers на NVIDIA GPU: см. requirements-ml.txt

@@ -1,0 +1,9 @@
+# ML-часть (ставится на ноутбук с видеокартой). Основное (fastapi, uvicorn, opencv) — как раньше.
+numpy
+openpyxl                 # только для python -m app.evaluate
+# torch и torchvision — сборку под свою CUDA см. https://pytorch.org/get-started/locally/
+torch
+torchvision
+transformers>=4.57.0     # первая версия с поддержкой Qwen3-VL
+accelerate
+pillow

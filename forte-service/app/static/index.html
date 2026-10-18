@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kassa Inspector</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=PT+Sans:wght@400;700&family=PT+Serif:wght@700&display=swap">
+<style>
+/* Терминал оператора: экран в центре, шкала времени под ним, журнал справа. Фон — падающий код. */
+:root{
+  --bg:#030805; --panel:rgba(6,16,10,.92); --panel-2:#07130c; --line:#14452a; --line-2:#1f6b40;
+  --ink:#c9f7d8; --dim:#5fa97b; --code:#2bff88; --code-dim:#0f5c33; --warn:#ffcc33; --bad:#ff4f5e; --bad-bg:#2a070c; --ok-bg:#062a16;
+  --f:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--f);font-size:14px;line-height:1.55;color:var(--ink);background:var(--bg);overflow-x:hidden}
+#rain{position:fixed;inset:0;z-index:0;opacity:.35;pointer-events:none;will-change:transform}
+
+.crt{position:fixed;inset:0;z-index:1;pointer-events:none;will-change:transform;background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px)}
+.app{position:relative;z-index:2;max-width:1280px;margin:0 auto;padding:0 16px 24px;display:grid;gap:14px}
+
+/* шапка */
+header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:14px 0 10px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:12px}
+.brand h1{margin:0;font-size:16px;font-weight:800;letter-spacing:.22em;color:var(--code);text-shadow:0 0 12px rgba(43,255,136,.5)}
+.brand .cur{display:inline-block;width:9px;height:16px;background:var(--code);vertical-align:-2px;margin-left:4px;animation:blink 1s steps(1) infinite}
+.brand small{display:block;font-size:11px;color:var(--dim);letter-spacing:.08em}
+.tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.chip{font:inherit;font-size:12px;padding:6px 10px;color:var(--ink);background:var(--panel-2);border:1px solid var(--line-2);cursor:pointer;letter-spacing:.04em}
+.chip:hover{border-color:var(--code);color:var(--code)}
+.chip[aria-pressed="true"]{background:var(--code);color:#02140a;border-color:var(--code)}
+.status{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+.status i{width:8px;height:8px;background:#555}
+.status.on i{background:var(--code);box-shadow:0 0 8px var(--code)} .status.off i{background:var(--bad)}
+.keybox{display:flex;align-items:center;gap:6px}
+.keybox input{font:inherit;font-size:12px;width:150px;padding:6px 8px;background:#000;color:var(--code);border:1px solid var(--line-2)}
+.keybox input::placeholder{color:var(--code-dim)}
+
+/* раскладка */
+.desk{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;align-items:start}
+@media (max-width:900px){.desk{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);box-shadow:0 0 0 1px rgba(43,255,136,.04),0 0 30px rgba(0,0,0,.6)}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+.ph b{color:var(--code);font-weight:700}
+
+/* экран */
+.screen{position:relative;aspect-ratio:16/9;max-width:100%;background:#000;overflow:hidden}
+.screen video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+.empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;cursor:pointer;padding:20px}
+.empty.over{outline:2px dashed var(--code);outline-offset:-10px;background:rgba(43,255,136,.05)}
+.empty input{display:none}
+.empty .big{font-size:clamp(14px,2vw,18px);font-weight:800;color:var(--code);letter-spacing:.08em}
+.empty .hint{color:var(--dim);font-size:12px}
+.scene{display:block;width:min(560px,92%);height:auto;image-rendering:pixelated;margin-bottom:10px}
+#scene{display:contents}
+.osd{position:absolute;top:10px;font-size:12px;font-weight:700;color:#fff;text-shadow:0 1px 2px #000;letter-spacing:.08em;pointer-events:none}
+.osd.l{left:12px} .osd.r{right:12px}
+.osd .rec{color:var(--bad)} .osd .rec::before{content:"● ";animation:blink 1s steps(1) infinite}
+.scan{position:absolute;left:0;right:0;height:3px;top:0;background:var(--code);box-shadow:0 0 16px 4px rgba(43,255,136,.55);opacity:0;pointer-events:none}
+.scanning .scan{opacity:1;animation:scan 2.2s linear infinite}
+.scanning .screen::after{content:"";position:absolute;inset:0;background:linear-gradient(rgba(43,255,136,.05),rgba(43,255,136,.05));pointer-events:none}
+@keyframes scan{from{top:0}to{top:100%}}
+
+/* шкала времени */
+.tlwrap{position:relative;padding:12px 12px 10px;border-top:1px solid var(--line)}
+.timeline{position:relative;height:30px;background:repeating-linear-gradient(90deg,var(--panel-2) 0 9px,#0a1a10 9px 10px);border:1px solid var(--line)}
+.timeline .ph-head{position:absolute;top:-3px;bottom:-3px;width:2px;background:#fff;left:0;pointer-events:none;box-shadow:0 0 6px #fff}
+.tick{position:absolute;top:0;bottom:0;width:6px;margin-left:-3px;padding:0;border:0;background:var(--bad);cursor:pointer;box-shadow:0 0 10px rgba(255,79,94,.7)}
+.tick::after{content:attr(data-n);position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:800;color:var(--bad)}
+.tick:hover,.tick.active{width:10px;margin-left:-5px;background:#fff}
+.tl-scale{display:flex;justify-content:space-between;margin-top:4px;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px;border-top:1px solid var(--line)}
+.go{font:inherit;font-size:14px;font-weight:800;letter-spacing:.12em;padding:11px 20px;background:var(--code);color:#02140a;border:0;cursor:pointer;text-transform:uppercase}
+.go:hover:not(:disabled){box-shadow:0 0 18px rgba(43,255,136,.6)}
+.go:disabled{background:var(--code-dim);color:#062915;cursor:not-allowed}
+.fname{font-size:12px;color:var(--dim);overflow-wrap:anywhere}
+
+/* журнал */
+.log{display:grid;gap:0;max-height:calc(100vh - 140px);overflow:auto}
+.term{padding:10px 12px 4px;font-size:12px;color:var(--dim);min-height:96px;max-height:220px;overflow:auto;white-space:pre-wrap}
+.cmd{display:flex;align-items:center;gap:6px;padding:4px 12px 10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--code)}
+.cmd input{flex:1;min-width:0;font:inherit;font-size:12px;background:transparent;border:0;color:var(--code);caret-color:var(--code);padding:2px 0}
+.cmd input::placeholder{color:var(--code-dim)}
+.cmd input:focus{outline:0}
+/* живой прогресс */
+.term .ln::before{content:"> "}
+.progline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.progline{color:var(--code)} .progline .pb{color:var(--code-dim)} .progline .pb b{color:var(--code);font-weight:400}
+/* справочник норм */
+.lawlink{font:inherit;font-size:11px;color:var(--warn);background:none;border:0;padding:0;cursor:pointer;text-align:left;text-decoration:underline dotted}
+.lawlink:hover{color:#fff}
+dialog.law{width:min(760px,94vw);max-height:88vh;border:1px solid var(--code);background:#020604;color:var(--ink);padding:0;box-shadow:0 0 40px rgba(43,255,136,.25)}
+dialog.law::backdrop{background:rgba(0,0,0,.75)}
+.law-h{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase;position:sticky;top:0;background:#020604}
+.law-b{padding:14px;overflow:auto;max-height:calc(88vh - 44px);display:grid;gap:14px;font-size:13px}
+.law-b h2{margin:0;font-size:18px;color:#fff;letter-spacing:.02em}
+.law-b h4{margin:0 0 6px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--code)}
+.law-b ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.law-b .bad li::marker{content:"✗ ";color:var(--bad)} .law-b .ok li::marker{content:"✓ ";color:var(--code)}
+.norm{border:1px solid var(--line);padding:10px 12px;display:grid;gap:6px;background:var(--panel-2)}
+.norm .doc{color:var(--dim);font-size:12px}
+.norm .cl{color:var(--warn);font-weight:700}
+.norm blockquote{margin:0;padding-left:10px;border-left:2px solid var(--code);color:#e9fff1}
+.norm .para{color:var(--ink)} .norm .para::before{content:"Кратко: ";color:var(--dim)}
+.norm a{color:var(--code);font-size:12px}
+.law-list{display:grid;gap:6px}
+.law-list button{font:inherit;font-size:13px;text-align:left;padding:8px 10px;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);cursor:pointer}
+.law-list button:hover{border-color:var(--code);color:var(--code)}
+.law-x{font:inherit;font-size:12px;background:none;border:1px solid var(--line-2);color:var(--ink);padding:3px 8px;cursor:pointer}
+body.plain dialog.law{background:#fff;color:var(--ink);border-color:var(--line-2)} body.plain .law-h{background:#fff}
+body.plain .law-b h2{color:var(--ink)} body.plain .norm blockquote{color:var(--ink)}
+/* тревога на экране */
+.alert{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.9);max-width:86%;padding:10px 16px;background:rgba(42,7,12,.92);border:2px solid var(--bad);
+  color:#fff;font-weight:800;letter-spacing:.06em;text-align:center;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;box-shadow:0 0 30px rgba(255,79,94,.6)}
+.alert small{display:block;font-weight:400;color:#ffd0d4;letter-spacing:0;margin-top:2px}
+.alert.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.screen.alarm{animation:alarm .9s steps(2) 2}
+.screen.alarm::before{content:"";position:absolute;inset:0;z-index:1;border:4px solid var(--bad);box-shadow:inset 0 0 40px rgba(255,79,94,.55);pointer-events:none}
+@keyframes alarm{50%{filter:brightness(1.4) saturate(1.3)}}
+/* превью на шкале */
+.tip{position:absolute;bottom:calc(100% + 26px);width:180px;transform:translateX(-50%);background:#000;border:1px solid var(--bad);padding:4px;font-size:11px;color:var(--ink);pointer-events:none;z-index:5;box-shadow:0 0 18px rgba(0,0,0,.8)}
+.tip img{display:block;width:100%;height:auto;margin-bottom:4px}
+.tip b{color:var(--bad)}
+/* глитч заголовка */
+.brand h1.glitch{animation:glitch .12s steps(2) 6}
+@keyframes glitch{0%{text-shadow:2px 0 #ff4f5e,-2px 0 #2bff88;transform:translateX(1px)}50%{text-shadow:-3px 0 #ff4f5e,3px 0 #2bff88;transform:translateX(-2px) skewX(-6deg)}}
+.term .ok{color:var(--code)} .term .w{color:var(--warn)} .term .e{color:var(--bad)}
+.verdict{padding:14px 12px;border-bottom:1px solid var(--line)}
+.verdict .big{font-size:20px;font-weight:800;letter-spacing:.14em}
+.verdict.ok{background:var(--ok-bg)} .verdict.ok .big{color:var(--code);text-shadow:0 0 12px rgba(43,255,136,.5)}
+.verdict.bad{background:var(--bad-bg)} .verdict.bad .big{color:var(--bad);text-shadow:0 0 12px rgba(255,79,94,.5)}
+.verdict p{margin:4px 0 0;font-size:12px;color:var(--ink)}
+.entry{display:grid;gap:8px;padding:12px;border-bottom:1px solid var(--line);cursor:pointer;border-left:3px solid transparent}
+.entry:hover,.entry.active{background:rgba(255,79,94,.06);border-left-color:var(--bad)}
+.entry .top{display:flex;gap:8px;align-items:baseline;justify-content:space-between}
+.entry .n{color:var(--bad);font-weight:800}
+.entry .t{font-weight:700;color:#fff}
+.entry .tc{font-size:12px;color:var(--code);font-variant-numeric:tabular-nums;white-space:nowrap}
+.entry p{margin:0;font-size:12px;color:var(--ink)}
+.entry .rule{font-size:11px;color:var(--dim)}
+.frames{display:flex;gap:6px;flex-wrap:wrap}
+.frames img{width:96px;height:auto;border:1px solid var(--line-2);cursor:zoom-in}
+.idle{padding:16px 12px;font-size:12px;color:var(--dim)}
+details{padding:10px 12px;font-size:12px;color:var(--dim)}
+details pre{white-space:pre-wrap;word-break:break-all;max-height:240px;overflow:auto;background:#000;color:#9fd;padding:8px;margin:8px 0 0}
+footer{font-size:11px;color:var(--dim);text-align:center;letter-spacing:.06em;padding-top:4px}
+.walkers{position:relative;height:140px;contain:layout paint;overflow:hidden;
+  background:linear-gradient(transparent 128px,#0c2a18 128px,#0c2a18 130px,transparent 130px),
+             repeating-linear-gradient(90deg,#08170e 0 16px,#0b1f13 16px 32px) bottom/100% 10px no-repeat}
+.walker{position:absolute;bottom:10px;left:0;will-change:transform,opacity}
+.walker svg{display:block;image-rendering:pixelated;shape-rendering:crispEdges}
+.walker .fa{animation:fa .5s steps(1) infinite}.walker .fb{animation:fb .5s steps(1) infinite}
+.walker.roll svg{animation:roll .9s linear infinite}
+.walker .say{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:6px;white-space:nowrap;font-size:13px;font-weight:700;color:#02140a;background:var(--code);padding:2px 7px;opacity:0;animation:say 24s steps(1) infinite}
+.spr{position:relative;overflow:hidden}
+.spr img{position:absolute;left:0;top:0;max-width:none;image-rendering:pixelated;animation:sheet .7s steps(4) infinite;user-select:none}
+@keyframes sheet{to{transform:translateX(-100%)}}
+.walker.roll .spr{animation:roll 1.2s linear infinite}
+.walkers.glitchy .walker .spr{animation:gl .09s steps(2) 10;filter:hue-rotate(120deg) saturate(2.5)}
+.cloud{position:absolute;bottom:-4px;z-index:3;width:210px;height:113px;pointer-events:none;animation:bob 6s ease-in-out infinite;will-change:transform}
+.cloud img{width:100%;height:100%;image-rendering:pixelated;display:block;opacity:.96}
+.cloud.cl-l{left:-14px}.cloud.cl-r{right:-14px;animation-delay:-3s}
+.cloud img{filter:drop-shadow(0 0 10px rgba(43,255,136,.15))}
+@keyframes bob{50%{transform:translateY(-5px)}}
+.bld{position:absolute;bottom:8px;z-index:3;pointer-events:none}
+.bld svg{display:block;image-rendering:pixelated;shape-rendering:crispEdges}
+.bld.home{left:0}.bld.bank{right:0}
+.bld .sign{position:absolute;left:50%;transform:translateX(-50%);font-weight:800;font-size:12px;letter-spacing:.2em;white-space:nowrap}
+.bld.bank .sign{top:37px;font-size:11px;color:#3a2a08;letter-spacing:.3em;text-shadow:none}
+.bld.home .sign{top:-16px;color:var(--dim);font-size:10px;letter-spacing:.12em}
+.walker{z-index:2}
+.hole{position:absolute;bottom:4px;height:16px;transform:translateX(-50%) scaleX(0);transform-origin:center;transition:transform .35s cubic-bezier(.3,1.6,.5,1);
+  background:radial-gradient(ellipse at center,#000 55%,#0b3b22 70%,transparent 72%);box-shadow:0 0 18px rgba(43,255,136,.35);z-index:0}
+.hole.open{transform:translateX(-50%) scaleX(1)}
+.walkers.glitchy .walker svg{animation:gl .09s steps(2) 10;filter:hue-rotate(120deg) saturate(2.5)}
+@keyframes gl{50%{transform:translateX(3px) skewX(-12deg)}}
+.law-tabs{display:flex;gap:6px;flex-wrap:wrap}
+.law-tabs button{font:inherit;font-size:12px;padding:5px 10px;background:var(--panel-2);color:var(--ink);border:1px solid var(--line-2);cursor:pointer;letter-spacing:.06em}
+.law-tabs button[aria-pressed="true"]{background:var(--code);color:#02140a;border-color:var(--code)}
+.law-list .meta{display:block;font-size:11px;color:var(--dim);margin-top:2px}
+.norm .cl button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-decoration:underline dotted}
+@keyframes walk{from{transform:translateX(-80px)}to{transform:translateX(min(1320px,100vw))}}
+@keyframes fa{0%{opacity:1}50%{opacity:0}}@keyframes fb{0%{opacity:0}50%{opacity:1}}
+@keyframes roll{to{transform:rotate(360deg)}}
+.hd .fr{opacity:0;animation:hdf var(--fd,.48s) steps(1) infinite}
+@keyframes hdf{0%{opacity:1}25%{opacity:0}}
+.walker.rgb svg{animation:hue 3s linear infinite}@keyframes hue{to{filter:hue-rotate(360deg)}}
+.walker.tired svg{animation:tired 1.6s ease-in-out infinite}@keyframes tired{50%{transform:translateY(3px) rotate(-4deg)}}
+@keyframes say{0%,90%{opacity:0}91%,99%{opacity:1}}
+dialog{border:1px solid var(--code);padding:0;background:#000;max-width:95vw}
+dialog img{display:block;max-width:95vw;max-height:90vh}
+[hidden]{display:none!important}
+:focus-visible{outline:2px solid var(--warn);outline-offset:2px}
+@keyframes blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+
+/* ---------- официальный вид ---------- */
+.op{display:none!important}
+body.plain .op{display:revert!important} body.plain .tm{display:none!important}
+body.plain{--bg:#eef1f5;--panel:#fff;--panel-2:#f6f8fb;--line:#d6dbe3;--line-2:#b9c2cf;--ink:#1c2533;--dim:#566275;--code:#1d4f91;--code-dim:#c5d3e8;
+  --bad:#b3261e;--bad-bg:#fbeceb;--ok-bg:#e9f5ee;--warn:#8a5a00;
+  font-family:"PT Sans",-apple-system,"Segoe UI",Roboto,sans-serif;font-size:15px;color-scheme:light}
+body.plain #rain,body.plain .crt,body.plain .walkers{display:none}
+body.plain .app{padding-top:0}
+body.plain header{margin:0 -16px;padding:0 16px;background:#0f2a4a;border-bottom:4px solid #1d4f91;color:#fff;min-height:72px}
+body.plain .obrand{display:flex!important;align-items:center;gap:14px}
+.obrand svg{width:40px;height:40px;flex:none}
+.obrand .oname{font-family:"PT Serif",Georgia,serif;font-size:21px;font-weight:700;letter-spacing:.01em;color:#fff;line-height:1.1}
+.obrand .osub{font-size:13px;color:#b9c9de;margin-top:2px}
+body.plain .tools .status{color:#d5e0ee} body.plain .status.on i{background:#4cc38a;box-shadow:none} body.plain .status i{border-radius:50%}
+body.plain .tools label{color:#b9c9de!important}
+body.plain .keybox input{background:#fff;color:var(--ink);border:1px solid #fff;border-radius:3px;font-family:inherit;font-size:13px}
+body.plain .chip{font-family:inherit;font-size:13px;letter-spacing:0;border-radius:3px;background:transparent;color:#fff;border-color:rgba(255,255,255,.45)}
+body.plain .chip:hover{background:rgba(255,255,255,.12);color:#fff;border-color:#fff}
+body.plain .chip[aria-pressed="true"]{background:#fff;color:#0f2a4a;border-color:#fff}
+body.plain .desk{margin-top:6px}
+body.plain .panel{box-shadow:0 1px 2px rgba(15,42,74,.06);border-radius:4px;border-top:3px solid #1d4f91;overflow:hidden}
+body.plain .ph{font-size:12px;letter-spacing:.08em;color:#0f2a4a;font-weight:700;background:#f6f8fb}
+body.plain .ph b{color:var(--dim);font-weight:400}
+body.plain .screen{background:#f6f8fb}
+body.plain .screen video{background:#000}
+.oempty{color:var(--dim);font-size:14px;text-align:center}
+.oempty svg{width:72px;height:72px;margin:0 auto 10px;display:block}
+.oempty strong{display:block;font-size:18px;color:#0f2a4a;margin-bottom:4px}
+body.plain .empty{gap:0} body.plain .empty.over{outline-color:#1d4f91;background:#e8eef7}
+body.plain .timeline{background:#eef1f5;border-color:var(--line);border-radius:3px}
+body.plain .tick{box-shadow:none;border-radius:1px} body.plain .tick::after{font-family:inherit}
+body.plain .tl-scale{font-family:inherit}
+body.plain .go{font-family:inherit;font-size:15px;letter-spacing:.02em;text-transform:none;background:#1d4f91;color:#fff;border-radius:3px;padding:11px 22px}
+body.plain .go:hover:not(:disabled){box-shadow:none;background:#163f75}
+body.plain .go:disabled{background:#b9c2cf;color:#fff}
+body.plain .term{font-family:inherit;font-size:13px;color:var(--dim);max-height:160px}
+body.plain .progline .pb{color:#c5d3e8} body.plain .progline .pb b{color:#1d4f91}
+body.plain .verdict{border-left:5px solid}
+body.plain .verdict.ok{border-left-color:#1e7b45} body.plain .verdict.bad{border-left-color:#b3261e}
+body.plain .verdict .big{font-family:"PT Serif",Georgia,serif;font-size:19px;letter-spacing:0;text-shadow:none}
+body.plain .verdict.ok .big{color:#1e7b45} body.plain .verdict.bad .big{color:#b3261e}
+body.plain .entry{font-family:inherit}
+body.plain .entry .n{display:inline-grid;place-items:center;min-width:22px;height:22px;margin-right:4px;background:#b3261e;color:#fff;border-radius:3px;font-size:12px}
+body.plain .entry .t{color:var(--ink)} body.plain .entry .tc{color:#1d4f91;font-family:inherit}
+body.plain .entry p{font-size:14px} body.plain .lawlink{color:#1d4f91}
+body.plain .entry:hover,body.plain .entry.active{background:#f6f8fb;border-left-color:#1d4f91}
+body.plain details pre{background:#f3f4f6;color:#333}
+body.plain .alert{background:#fff;color:#1c2533;border-color:#b3261e;box-shadow:0 6px 24px rgba(0,0,0,.18)} body.plain .alert small{color:#566275}
+body.plain .tip{background:#fff;color:var(--ink);border-color:#b9c2cf;box-shadow:0 6px 20px rgba(0,0,0,.15)}
+body.plain footer{font-size:12px;letter-spacing:0;border-top:1px solid var(--line);padding-top:12px;margin-top:6px}
+body.plain dialog.law{font-family:inherit;border-top:4px solid #1d4f91}
+body.plain .law-b h2{font-family:"PT Serif",Georgia,serif;color:#0f2a4a}
+body.plain .law-b h4{color:#1d4f91}
+body.plain .norm{background:#f6f8fb;border-radius:3px} body.plain .norm blockquote{border-left-color:#1d4f91;color:#1c2533;font-style:italic}
+body.plain .norm a{color:#1d4f91}
+body.plain .law-list button{border-radius:3px} body.plain .law-list button:hover{border-color:#1d4f91;color:#1d4f91}
+body.plain .law-tabs button{border-radius:3px;font-family:inherit} body.plain .law-tabs button[aria-pressed="true"]{background:#1d4f91;color:#fff;border-color:#1d4f91}
+body.plain .brand h1.glitch{animation:none}
+body.plain .term .ln{padding:2px 0;border-bottom:1px dashed #e3e7ee}
+body.plain .term .ln::before{content:"•  ";color:#1d4f91}
+body.plain .term .ok{color:#1e7b45} body.plain .term .w{color:#8a5a00} body.plain .term .e{color:#b3261e}
+body.plain .progline .pb{letter-spacing:-1px;font-family:"JetBrains Mono",monospace;font-size:11px}
+body.plain .tick.active,body.plain .tick:hover{background:#0f2a4a}
+body.plain .screen.alarm{animation:none}
+body.plain .screen.alarm::before{border-width:3px;border-color:#b3261e;box-shadow:none}
+body.plain .timeline .ph-head{background:#0f2a4a;box-shadow:none}
+</style>
+</head>
+<body>
+<canvas id="rain" aria-hidden="true"></canvas>
+<div class="crt" aria-hidden="true"></div>
+
+<div class="app">
+  <header>
+    <div class="obrand op"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="4" fill="#1d4f91" stroke="#8fb0dc"/><circle cx="20" cy="18" r="8" fill="none" stroke="#fff" stroke-width="2.5"/><circle cx="20" cy="18" r="3" fill="#fff"/><rect x="9" y="29" width="22" height="3" rx="1" fill="#8fb0dc"/></svg>
+      <div><div class="oname">Kassa Inspector</div><div class="osub">Система видеоконтроля кассовой дисциплины</div></div></div>
+    <div class="brand tm">
+      <div><h1 id="title" data-text="KASSA//INSPECTOR">KASSA//INSPECTOR</h1><span class="cur" style="display:none"></span><small>локальный анализ записей кассы · без облака · без распознавания лиц</small></div>
+    </div>
+    <div class="tools">
+      <span class="status" id="health"><i></i><span>сервер…</span></span>
+      <span class="keybox"><label for="key" style="font-size:12px;color:var(--dim)">KEY</label><input type="password" id="key" placeholder="api-ключ" autocomplete="off"></span>
+      <button class="chip" id="lawBtn" type="button">СПРАВОЧНИК</button>
+      <button class="chip" id="demoBtn" type="button" aria-pressed="false">ДЕМО</button>
+      <button class="chip" id="viewBtn" type="button" aria-pressed="false">ОФИЦИАЛЬНЫЙ ВИД</button>
+    </div>
+  </header>
+
+  <div class="desk" id="desk">
+    <section class="panel" aria-label="Экран">
+      <div class="ph"><span><span class="tm">Экран</span><span class="op">Видеозапись</span> · <b id="camLabel">нет сигнала</b></span><span id="dur">--:--</span></div>
+      <div class="screen" id="screen">
+        <label class="empty" id="drop" for="file">
+          <span id="scene" class="tm" aria-hidden="true"></span>
+          <span class="big tm">&gt; ЗАГРУЗИТЬ ЗАПИСЬ_</span>
+          <span class="hint tm">перетащите .mov на экран или нажмите</span>
+          <span class="oempty op"><svg viewBox="0 0 72 72" aria-hidden="true"><rect x="8" y="18" width="44" height="34" rx="4" fill="none" stroke="#1d4f91" stroke-width="3"/><path d="M52 30l12-7v26l-12-7z" fill="none" stroke="#1d4f91" stroke-width="3" stroke-linejoin="round"/><path d="M30 28v14M23 35h14" stroke="#1d4f91" stroke-width="3" stroke-linecap="round"/></svg>
+            <strong>Загрузите видеозапись</strong>Перетащите файл .mov в эту область или нажмите, чтобы выбрать</span>
+          <input type="file" id="file" accept=".mov,video/quicktime,video/*">
+        </label>
+        <video id="player" controls muted playsinline hidden></video>
+        <div class="osd l" hidden id="osdL"><span class="rec">REC</span> CAM-01</div>
+        <div class="osd r" hidden id="osdR">0:00.0</div>
+        <div class="alert" id="alert" role="status" aria-live="polite"></div>
+        <div class="scan" aria-hidden="true"></div>
+      </div>
+      <div class="tlwrap">
+        <div class="timeline" id="timeline" aria-label="Шкала времени ролика"><span class="ph-head" id="phHead"></span></div>
+        <div class="tl-scale"><span>0:00</span><span id="tlEnd">--:--</span></div>
+      </div>
+      <div class="actions">
+        <button class="go" id="go" type="button" disabled>Запустить анализ</button>
+        <span class="fname" id="fname">файл не выбран · анализ до 5 минут</span>
+      </div>
+    </section>
+
+    <aside class="panel" aria-label="Журнал">
+      <div class="ph"><span class="tm">Журнал нарушений</span><span class="op">Результаты проверки</span><span id="jobId">job: —</span></div>
+      <div class="log">
+        <div class="term" id="term">&gt; ожидание записи… введите help</div>
+        <form class="cmd tm" id="cmdForm" autocomplete="off"><span>&gt;</span><input id="cmd" placeholder="команда: help" aria-label="Команда терминала"></form>
+        <div id="verdictBox" hidden class="verdict"><div class="big" id="vbig"></div><p id="vtext"></p></div>
+        <div id="entries"><div class="idle">Здесь появятся найденные нарушения: тип, время, кадр-доказательство и норматив РК.</div></div>
+        <details id="rawBox" hidden><summary>ответ сервера (json)</summary><pre id="raw"></pre></details>
+      </div>
+    </aside>
+  </div>
+
+  <div class="walkers" aria-hidden="true" id="walkers"></div>
+  <footer><span class="tm">результат — подсказка для проверяющего, а не юридическое заключение · нормативы: акты Республики Казахстан</span><span class="op">Результаты автоматической проверки носят рекомендательный характер и подлежат проверке уполномоченным сотрудником. Нормативная база: акты Национального Банка Республики Казахстан и АРРФР. Обработка выполняется локально, без передачи данных третьим лицам; анализ строго визуальный, без звука и распознавания лиц.</span></footer>
+</div>
+<dialog class="law" id="law" aria-labelledby="lawTitle"><div class="law-h"><span id="lawTitle">Справочник нарушений и нормативов</span><button class="law-x" id="lawClose" type="button">закрыть ✕</button></div><div class="law-b" id="lawBody"></div></dialog>
+<dialog id="zoom"><img id="zoomImg" alt="Кадр-доказательство крупно"></dialog>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+  var reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- падающий код ----------
+  var cv=$('rain'),cx=cv.getContext('2d'),cols=[],W=0,H=0,FS=16;
+  var CH='0123456789АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ₸§#';
+  function size(){W=innerWidth;H=innerHeight;cv.width=W;cv.height=H;cols=[];for(var i=0;i<Math.ceil(W/FS);i++)cols.push(Math.random()*H/FS|0)}
+  function rain(){cx.fillStyle='rgba(3,8,5,.12)';cx.fillRect(0,0,W,H);cx.font=FS+'px JetBrains Mono, monospace';
+    for(var i=0;i<cols.length;i++){var y=cols[i]*FS;cx.fillStyle=Math.random()<.04?'#d6ffe6':'#2bff88';cx.fillText(CH[Math.random()*CH.length|0],i*FS,y);
+      if(y>H&&Math.random()>.975)cols[i]=0;else cols[i]++}}
+  size();
+
+
+  // ---------- пиксель-арт: карты спрайтов ----------
+  // каждая строка — ряд пикселей, символ — цвет из палитры, '.' — пусто
+  function px(map,pal,ox,oy){var s='';ox=ox||0;oy=oy||0;
+    map.forEach(function(row,y){var x=0;while(x<row.length){var ch=row[x];if(ch==='.'||!pal[ch]){x++;continue}var w=1;while(row[x+w]===ch)w++;
+      s+='<rect x="'+(x+ox)+'" y="'+(y+oy)+'" width="'+w+'" height="1" fill="'+pal[ch]+'"/>';x+=w}});return s}
+  var LEGS_A=['..dd..dd....','..dd..dd....','..dd...dd...','.bbb...bbb..'];
+  var LEGS_B=['...dd.dd....','...dd.dd....','...dd.dd....','..bbb.bbb...'];
+  var S={
+    cashier:{w:12,pal:{h:'#3b2414',s:'#f0caa0',e:'#111',m:'#b4574a',w:'#f2f2f2',v:'#0f5c33',t:'#2bff88',g:'#c9a24b',d:'#1d2a24',b:'#0a0a0a'},body:[
+      '...hhhhh....','..hhhhhhh...','..hsssssh...','..sesssesh..','..sssssss...','...ssmss....','....sss.....',
+      '..wvvtvvw...','.wvvvtvvvw..','.svvvtvvvs..','.svvgvgvvs..','..vvvvvvv...','..ddddddd...']},
+    client:{w:12,pal:{c:'#c0392b',k:'#8e2a20',s:'#d9a77c',e:'#111',m:'#7a3b2e',j:'#2f4a8a',l:'#3d5ea8',z:'#c9d3e6',d:'#22283a',b:'#0a0a0a'},body:[
+      '..ccccccc...','.kkkkkkkkk..','..sssssss...','..sessses...','..sssssss...','...smmss....','....sss.....',
+      '..jjjzjjj...','.jjljzjljj..','.sjljzjljs..','.sjjjzjjjs..','..jjjjjjj...','..ddddddd...']},
+    hacker:{w:12,pal:{o:'#1b1f1d',q:'#2a302d',f:'#050505',e:'#2bff88',n:'#0f5c33',l:'#9da5a1',g:'#2bff88',d:'#1a1a1a',b:'#000'},body:[
+      '...ooooo....','..oqqqqqo...','.oqfffffqo..','.oqfefefqo..','.oqfffffqo..','.ooqfffqoo..','..ooooooo...',
+      '.oooooooooo.','.oqlllllloo.','.oqlggggloo.','.oqlggggloo.','..qlllllo...','..ddddddd...']},
+    bot:{w:12,pal:{a:'#2bff88',r:'#14452a',f:'#0a1a10',e:'#2bff88',m:'#0f5c33',c:'#1f6b40',k:'#c9f7d8',d:'#14452a',b:'#0a1a10'},body:[
+      '.....a......','.....a......','..rrrrrrr...','..rfffffr...','..rfefefr...','..rfmmmfr...','..rrrrrrr...',
+      '....rrr.....','..ccccccc...','.kcckacckk..','..ccccccc...','..ccccccc...','..ddddddd...']},
+    note:{w:16,legsShift:2,pal:{g:'#1f8f4e',l:'#5fd38d',k:'#0d4a28',w:'#eaffef',e:'#111',t:'#0d4a28',d:'#0d4a28',b:'#0a0a0a'},body:[
+      'kkkkkkkkkkkkkkkk','kllllllllllllllk','klgggggtttttgglk','klgwwggtttttgglk','klgweggggtgggglk','klgggggggtgggglk','kllllllllllllllk','kkkkkkkkkkkkkkkk']},
+    safe:{w:12,pal:{s:'#6f7a77',k:'#3d4543',l:'#9aa5a2',c:'#c9a24b',y:'#2bff88',e:'#111',d:'#2b3230',b:'#0a0a0a'},body:[
+      '.kkkkkkkkkk.','.kllllllllk.','.klsssssslk.','.klsesesslk.','.klsssssslk.','.klssccsslk.','.klscyycslk.',
+      '.klssccssck.','.klsssssslk.','.kllllllllk.','.kkkkkkkkkk.']},
+    card:{w:14,pal:{u:'#1f3a8a',v:'#2b4fb8',c:'#c9a24b',w:'#eaf0ff',e:'#111',d:'#14244f',b:'#0a0a0a'},body:[
+      '..............','..............','uuuuuuuuuuuuuu','uvvvvvvvvvvvvu','uvccvvvvweevvu','uvccvvvvvvvvvu','uuuuuuuuuuuuuu',
+      'uvwwvwwvwwvwwu','uvvvvvvvvvvvvu','uuuuuuuuuuuuuu'],legsShift:1},
+    collector:{w:12,pal:{h:'#4a5a3c',v:'#1a1a1a',s:'#e0b48c',j:'#3e5a2a',r:'#e8c547',k:'#bfa478',t:'#7a5a12',d:'#2b2b2b',b:'#0a0a0a'},body:[
+      '...hhhhhh...','..hhhhhhhh..','..hvvvvvvh..','..ssssssss..','..ssssssss..','...ssssss...','..jjjjjjjkk.',
+      '.jjrrrrjkkkk','.sjjjjjjkttk','.sjjjjjjkkkk','..jjjjjj.kk.','..dddddd....','..dddddd....']},
+    goldsafe:{w:12,pal:{s:'#d9a72e',k:'#7a5a12',l:'#f7d774',c:'#fff3b0',y:'#ff4f5e',e:'#111',d:'#7a5a12',b:'#3a2a08'},body:[
+      '.kkkkkkkkkk.','.kllllllllk.','.klsssssslk.','.klsesesslk.','.klsssssslk.','.klssccsslk.','.klscyycslk.',
+      '.klssccssck.','.klsssssslk.','.kllllllllk.','.kkkkkkkkkk.']},
+    ram:{w:16,legsShift:3,pal:{g:'#1f7a3a',k:'#111',w:'#fff',y:'#e2b23a',d:'#1f7a3a',b:'#0a0a0a'},body:[
+      'gggggggggggggggg','gkkkgkkkgkkkgkkg','gkkkgkwkgkwkgkkg','gkkkgkkkgkkkgkkg','gggggggggggggggg','yy.yyyyyy.yyyyyy']},
+    ai:{w:12,pal:{w:'#f4f4f8',b:'#6b4fd8',p:'#6b4fd8',s:'#9a86f0',d:'#2c2550'},body:[
+      '..wwwwwwww..','.wwwwwwwwww.','.wwbwwbwwbw.','.wwwwwwwwww.','..wwwwwwww..','..ww........',
+      '...pppppp...','..pppppppp..','.spppppppps.','.spppppppps.','..pppppppp..','..dddddddd..']},
+    gpu:{w:16,legsShift:3,pal:{k:'#2a2a2a',a:'#8a8a8a',c:'#4a4a4a',e:'#fff',m:'#c05050',y:'#e2b23a',d:'#2a2a2a',b:'#0a0a0a'},body:[
+      'kkkkkkkkkkkkkkkk','kaaaakkkkkkaaaak','kaccakekkekaccak','kaccakkkkkkaccak','kaaaakkmmkkaaaak','kkkkkkkkkkkkkkkk','yyy.yyyy.yyyy...']},
+    pc:{w:14,legsShift:1,pal:{k:'#0d0d0d',s:'#141a24',g:'#2bff88',m:'#ff4fd8',o:'#3fd8ff',x:'#05070a',c:'#3fd8ff',v:'#8a5cff',d:'#0d0d0d',b:'#000'},body:[
+      'kkkkkkkkkkkkkk','ksssssssssssgk','ksmmmmmmmmmssk','kssooossooossk','ksoxoossoxoosk','kssooossooossk','ksssssssssssck',
+      'ksvvvvvvvvvssk','kssooossooossk','ksoxoossoxoosk','kssooossooossk','kscccccccccssk','kkkkkkkkkkkkkk']},
+    coin:{w:10,pal:{o:'#a87d1e',g:'#e2b23a',l:'#f7d774',t:'#7a5a12'},body:[
+      '...oooo...','..ogggglo.','.oggttggl.','.ogtttggo.','.oggtgggo.','.oggtgggo.','..oggggo..','...oooo...']}
+  };
+  // ===== HD пиксель-арт: рисуется кодом по сетке, 4 кадра анимации =====
+  function Grid(w,h){this.w=w;this.h=h;this.c=new Array(w*h).fill(null)}
+  Grid.prototype.p=function(x,y,col){x=Math.floor(x);y=Math.floor(y);if(x>=0&&y>=0&&x<this.w&&y<this.h)this.c[y*this.w+x]=col};
+  Grid.prototype.rect=function(x,y,w,h,col){for(var j=0;j<h;j++)for(var i=0;i<w;i++)this.p(x+i,y+j,col)};
+  Grid.prototype.box=function(x,y,w,h,fill,line){this.rect(x,y,w,h,line);this.rect(x+1,y+1,w-2,h-2,fill)};
+  Grid.prototype.disc=function(cx,cy,r,col){for(var y=Math.floor(cy-r);y<=cy+r;y++)for(var x=Math.floor(cx-r);x<=cx+r;x++){var dx=x+.5-cx,dy=y+.5-cy;if(dx*dx+dy*dy<=r*r)this.p(x,y,col)}};
+  Grid.prototype.line=function(x0,y0,x1,y1,col){x0=Math.round(x0);y0=Math.round(y0);x1=Math.round(x1);y1=Math.round(y1);
+    var dx=Math.abs(x1-x0),sx=x0<x1?1:-1,dy=-Math.abs(y1-y0),sy=y0<y1?1:-1,e=dx+dy;for(;;){this.p(x0,y0,col);if(x0===x1&&y0===y1)break;var e2=2*e;if(e2>=dy){e+=dy;x0+=sx}if(e2<=dx){e+=dx;y0+=sy}}};
+  Grid.prototype.svg=function(){var s='';for(var y=0;y<this.h;y++){var x=0;while(x<this.w){var c=this.c[y*this.w+x];if(!c){x++;continue}var n=1;while(x+n<this.w&&this.c[y*this.w+x+n]===c)n++;
+    s+='<rect x="'+x+'" y="'+y+'" width="'+n+'" height="1" fill="'+c+'"/>';x+=n}}return s};
+  function hdLegs(g,xs,y,f,col,boot){xs.forEach(function(x,k){var up=(f+k)%2;g.rect(x,y,2,up?3:4,col);g.rect(x-1+(up?1:0),y+(up?3:4),3,1,boot)})}
+  function fan(g,cx,cy,ang,P){
+    g.disc(cx,cy,7.6,P.out);g.disc(cx,cy,6.6,P.rim);g.disc(cx,cy,5.6,P.dark);
+    for(var k=0;k<7;k++){var a=ang+k*2*Math.PI/7;
+      g.line(cx-.5+Math.cos(a)*1.5,cy-.5+Math.sin(a)*1.5,cx-.5+Math.cos(a+.45)*5,cy-.5+Math.sin(a+.45)*5,P.blade);
+      g.line(cx-.5+Math.cos(a)*2.2,cy-.5+Math.sin(a)*2.2,cx-.5+Math.cos(a+.3)*4.6,cy-.5+Math.sin(a+.3)*4.6,P.blade2)}
+    g.disc(cx,cy,1.9,P.hub);g.p(cx-1,cy-1,P.hubhi)}
+  var HD={
+    gpu:{w:62,h:27,fd:'.9s',draw:function(g,f){
+      var P={out:'#191b2b',rim:'#d7dbf4',dark:'#262c4a',blade:'#5d68b0',blade2:'#4a5494',hub:'#c9cee6',hubhi:'#ffffff'};
+      // кронштейн
+      g.box(0,0,5,21,'#c4c9d6','#191b2b');g.rect(1,1,3,1,'#eef1f7');g.rect(1,4,3,3,'#191b2b');g.rect(1,10,3,3,'#191b2b');g.rect(2,17,1,3,'#8b92a6');
+      // кожух
+      g.box(5,1,57,18,'#8c95e2','#191b2b');g.rect(6,2,55,1,'#c3c9f7');g.rect(6,3,55,1,'#a6aef0');g.rect(6,15,55,3,'#6d76c8');g.rect(6,15,55,1,'#7f88d8');
+      // вентиляторы (вращаются: угол по кадру)
+      var ang=f*Math.PI/14;[17,33.5,50].forEach(function(cx){fan(g,cx,9,ang,P)});
+      // сонные глаза и капля пота
+      g.p(60,4+(f%2),'#7fd3ff');g.p(60,5+(f%2),'#bfe9ff');
+      // плата и контакты
+      g.rect(9,19,46,1,'#1d3b2b');g.rect(10,20,42,2,'#e2b23a');for(var x=11;x<52;x+=3)g.rect(x,20,1,2,'#b98a1e');g.rect(31,20,2,2,null);
+      hdLegs(g,[20,44],22,f,'#191b2b','#000')}},
+    ram:{w:54,h:21,fd:'.6s',draw:function(g,f){
+      // радиатор с бегущей RGB-подсветкой
+      g.box(0,0,54,6,'#2d3240','#11131a');g.rect(1,1,52,1,'#4a5164');
+      for(var x=1;x<53;x++){var h=((x*7+f*45)%360);g.rect(x,2,1,2,'hsl('+h+',100%,60%)')}
+      g.rect(1,4,52,1,'#20242f');
+      // плата и чипы
+      g.box(0,6,54,9,'#1f7a3a','#0c2a18');g.rect(1,7,52,1,'#2f9a50');
+      for(var i=0;i<6;i++){var cx=3+i*8.4|0;g.box(cx,8,7,5,'#141414','#000');g.rect(cx+1,9,5,1,'#3a3a3a')}
+      // контакты с ключом
+      g.rect(1,15,52,2,'#e2b23a');for(var x2=2;x2<53;x2+=2)g.p(x2,16,'#b98a1e');g.rect(26,15,2,2,null);
+      hdLegs(g,[14,38],17,f,'#0c2a18','#000')}},
+    server:{w:32,h:48,fd:'.8s',draw:function(g,f){
+      g.box(0,0,32,43,'#3a4150','#121520');g.rect(1,1,30,1,'#5a6378');
+      for(var u=0;u<4;u++){var y=3+u*10;g.box(2,y,28,9,'#262b37','#121520');
+        for(var vx=4;vx<20;vx+=2)g.rect(vx,y+2,1,5,'#3d4456');           // решётка
+        g.rect(21,y+2,6,2,'#151820');g.rect(21,y+5,6,2,'#151820');        // отсеки дисков
+        var on=(f+u)%4;g.p(28,y+2,on===0?'#2bff88':'#0c3a20');g.p(28,y+4,on===1?'#3fd8ff':'#0e2f3a');g.p(28,y+6,(f+u)%2?'#ffcc33':'#3a2e0a')}
+      g.rect(3,41,26,1,'#1d2230');
+      hdLegs(g,[8,22],43,f,'#121520','#000')}}
+  };
+  HD.ai={w:24,h:26,fd:'.6s',draw:function(g,f){
+      // ножки-контакты чипа по бокам
+      for(var y=4;y<16;y+=3){g.rect(0,y,3,1,'#c9ced8');g.rect(21,y,3,1,'#c9ced8')}
+      g.box(3,1,18,18,'#6b4fd8','#2c2550');g.rect(4,2,16,1,'#8f78f0');g.rect(4,17,16,1,'#5236b8');
+      // буквы A и I
+      var A=['.##.','#..#','####','#..#','#..#'],I=['###','.#.','.#.','.#.','###'];
+      A.forEach(function(r,y){for(var x=0;x<r.length;x++)if(r[x]==='#')g.p(6+x,7+y,'#ffffff')});
+      I.forEach(function(r,y){for(var x=0;x<r.length;x++)if(r[x]==='#')g.p(13+x,7+y,'#ffffff')});
+      g.p(19,3,f%2?'#2bff88':'#14452a');   // мигающий индикатор
+      hdLegs(g,[7,15],19,f,'#2c2550','#000')}};
+  function legs(w,shift){var pad=new Array((shift||0)+1).join('.');return {a:LEGS_A.map(function(r){return (pad+r).slice(0,w)}),b:LEGS_B.map(function(r){return (pad+r).slice(0,w)})}}
+
+  // ===== спрайт-листы: каждый кадр рисуется ОДИН раз в картинку, дальше анимация только сдвигает её (без перерисовки) =====
+  function gridFromMap(sp,legRows){var h=sp.body.length+(legRows?legRows.length:0),g=new Grid(sp.w,h);
+    function put(rows,oy){rows.forEach(function(r,y){for(var x=0;x<r.length;x++){var c=sp.pal[r[x]];if(r[x]!=='.'&&c)g.p(x,y+oy,c)}})}
+    put(sp.body,0);if(legRows)put(legRows,sp.body.length);return g}
+  var SHEETS={},DPR=Math.min(3,Math.max(1,Math.round(window.devicePixelRatio||1)));
+  function sheet(name,scale){var key=name+'@'+scale;if(SHEETS[key])return SHEETS[key];var frames=[],w,h,fd;
+    if(HD[name]){var H=HD[name];w=H.w;h=H.h;fd=parseFloat(H.fd)*1.4;for(var f=0;f<4;f++){var g=new Grid(w,h);H.draw(g,f);frames.push(g)}}
+    else{var sp=S[name],L=legs(sp.w,sp.legsShift),coin=name==='coin';w=sp.w;h=sp.body.length+(coin?0:4);fd=.7;
+      for(var f2=0;f2<4;f2++)frames.push(gridFromMap(sp,coin?null:(f2%2?L.b:L.a)))}
+    var k=Math.round(scale*DPR),fw=w*k,c=document.createElement('canvas');c.width=fw*4;c.height=h*k;var x=c.getContext('2d');
+    frames.forEach(function(g,fi){for(var yy=0;yy<h;yy++)for(var xx=0;xx<w;xx++){var col=g.c[yy*w+xx];if(col){x.fillStyle=col;x.fillRect(fi*fw+xx*k,yy*k,k,k)}}});
+    return SHEETS[key]={url:c.toDataURL(),w:w,h:h,fd:fd,cw:Math.round(w*k/DPR),ch:Math.round(h*k/DPR)}}
+  function spriteEl(name,scale){var s=sheet(name,scale),d=document.createElement('div');d.className='spr';
+    d.style.width=s.cw+'px';d.style.height=s.ch+'px';
+    var im=new Image();im.src=s.url;im.alt='';im.draggable=false;im.style.width=(s.cw*4)+'px';im.style.height=s.ch+'px';im.style.animationDuration=s.fd+'s';
+    d.appendChild(im);return d}
+  // ---------- сцена на пустом экране ----------
+  (function(){
+    var desk='<rect x="14" y="27" width="46" height="3" fill="#1f6b40"/><rect x="14" y="30" width="46" height="1" fill="#0c2a18"/><rect x="17" y="31" width="2" height="9" fill="#14452a"/><rect x="55" y="31" width="2" height="9" fill="#14452a"/>'+
+      '<rect x="40" y="21" width="9" height="6" fill="#2a302d"/><rect x="41" y="22" width="7" height="2" fill="#2bff88"/><rect x="42" y="25" width="5" height="1" fill="#0f5c33"/>'+
+      '<rect x="26" y="24" width="7" height="3" fill="#1f8f4e"/><rect x="27" y="23" width="7" height="1" fill="#5fd38d"/>';
+    function at(name,x,y){var sp=S[name];return '<g transform="translate('+x+' '+y+')">'+px(sp.body,sp.pal)+px(legs(sp.w,sp.legsShift).a,sp.pal,0,sp.body.length)+'</g>'}
+    var svg='<svg class="scene" viewBox="0 0 96 42" shape-rendering="crispEdges">'+
+      '<rect x="0" y="40" width="96" height="2" fill="#0c2a18"/>'+
+      at('bot',2,23)+at('cashier',22,10)+desk+at('client',64,23)+at('safe',80,27)+
+      '<rect x="72" y="4" width="10" height="5" fill="#2a302d"/><rect x="80" y="5" width="3" height="3" fill="#111"/><rect x="81" y="6" width="1" height="1" fill="#ff4f5e"/><rect x="76" y="9" width="1" height="3" fill="#2a302d"/>'+
+      '</svg>';
+    $('scene').innerHTML=svg;
+  })();
+
+  // ---------- парад внизу ----------
+  var wk=$('walkers');
+  var LINES={
+    cashier:['до конца смены 6 часов…','эх, щас бы пивка','я устала ходить','где мой обед?'],
+    note:['₸ ₸ ₸','меня опять помяли','я фальшивая? шучу','устала переходить из рук в руки'],
+    hacker:['access granted','пароль 12345? серьёзно?','я тут просто гуляю','vpn отвалился…'],
+    ram:['16 ГБ хватит всем','у меня утечка памяти…','где мой второй модуль?','устала ходить, я же не SSD'],
+    safe:['я заперт?','кто взял мой ключ?','внутри пусто, не смотрите','ноги затекли'],
+    gpu:['поменяйте мне термопасту!','термопрокладки на исходе…','майню с 2017… дайте поспать','90°C, я горю'],
+    client:['эх, щас бы пивка','где окно №2?','очередь как в поликлинике','я устал ходить'],
+    ai:['эх… опять трекер привычек','ещё один to-do лист?','я устал генерировать','промпт непонятный'],
+    bot:['сканирую…','нарушение! шучу','батарея 3%','я устал ходить'],
+    server:['uptime 99,999%','не перезагружайте меня','дайте кондиционер','кто сломал прод?']
+  };
+  var PARADE=[['cashier',4,0,'смена началась'],['note',4,0,'₸ ₸ ₸'],['hacker',4,0,'access granted'],['ram',2,0,'16 ГБ хватит всем'],
+              ['safe',4,0,'я заперт?'],['gpu',2,0,'майню с 2017… дайте поспать'],['client',4,0,'где окно №2?'],
+              ['ai',3,0,'эх… опять трекер привычек'],['bot',4,0,'сканирую…'],['server',2,0,'uptime 99,999%']];
+  // ---------- маршрут: плавно появляются слева и растворяются справа ----------
+  var START=20,FADE=90;
+  function endX(){return laneW-20}
+
+  var els=PARADE.map(function(p,i){
+    var d=document.createElement('div');d.className='walker'+(p[0]==='coin'?' roll':'');d.appendChild(spriteEl(p[0],p[1]));
+    var say=document.createElement('span');say.className='say';say.style.animationDelay='-'+(24-i*2.2).toFixed(1)+'s';d.appendChild(say);
+    var lines=LINES[p[0]]||[p[3]],li=Math.random()*lines.length|0;say.textContent=lines[li];
+    say.addEventListener('animationiteration',function(){li=(li+1)%lines.length;say.textContent=lines[li]});
+    wk.appendChild(d);return d;
+  });
+  var EW=PARADE.map(function(p){return sheet(p[0],p[1]).cw});
+  // у каждого — фиксированное «личное пространство»; если на экран все не влезают, остальные ждут за краем
+  var PAD=48,CUM=[0];for(var ci=1;ci<EW.length;ci++)CUM.push(CUM[ci-1]+EW[ci-1]/2+PAD+EW[ci]/2);
+  var RING_MIN=CUM[CUM.length-1]+EW[EW.length-1]/2+PAD+EW[0]/2,EWMAX=Math.max.apply(null,EW);
+  var st=PARADE.map(function(){return {y:0,vy:0,fall:false,gone:false,rise:false,tf:'',op:-1}});
+  var SPEED=32,offset=0,lastT=0,laneW=wk.clientWidth,rainAcc=0,hole=null,guests=[];
+  addEventListener('resize',function(){laneW=wk.clientWidth;size()});
+  function lane(){return endX()-START}
+  function ring(){return Math.max(lane()+EWMAX*2,RING_MIN)}
+  function edgeFade(cx){return Math.max(0,Math.min(1,(cx-START)/FADE,(endX()-cx)/FADE))}
+  function place(dt){
+    var R=ring();
+    for(var i=0;i<els.length;i++){
+      var cx=START-EWMAX+((offset+CUM[i])%R),x=cx-EW[i]/2,s=st[i];
+      if(hole&&hole.open&&!s.fall&&!s.gone&&!s.rise&&Math.abs(cx-hole.x)<hole.w/2-6){s.fall=true;s.vy=-60}
+      if(s.fall){s.vy+=900*dt;s.y+=s.vy*dt;if(s.y>95){s.fall=false;s.gone=true}}
+      if(s.rise){s.y-=50*dt;if(s.y<=0){s.y=0;s.rise=false}}
+      var op=s.gone?0:s.fall?Math.max(0,1-s.y/95):s.rise?Math.max(0,1-s.y/30):1;op=Math.round(op*edgeFade(cx)*20)/20;
+      var tf='translate3d('+Math.round(x)+'px,'+Math.round(s.y)+'px,0)'+(s.fall?' rotate('+Math.round(s.y*3)+'deg)':'');
+      if(tf!==s.tf){els[i].style.transform=tf;s.tf=tf}                // пишем в DOM, только если что-то изменилось
+      if(op!==s.op){els[i].style.opacity=op;s.op=op}
+    }
+    for(var g=guests.length-1;g>=0;g--){var q=guests[g];q.x+=q.v*dt;var gcx=q.x+q.w/2;
+      q.el.style.transform='translate3d('+Math.round(q.x)+'px,0,0)';q.el.style.opacity=Math.round(edgeFade(gcx)*20)/20;
+      if(gcx>endX()){q.el.remove();guests.splice(g,1)}}
+  }
+  function loop(t){
+    var dt=lastT?Math.min(.05,(t-lastT)/1000):0;lastT=t;offset+=dt*SPEED;   // dt ограничен: после сворачивания вкладки нет рывка
+    if(!document.body.classList.contains('plain')){
+      place(dt);
+      rainAcc+=dt;if(rainAcc>.07){rainAcc=0;rain()}                         // фон ~14 кадров/с — глазу хватает
+    }
+    requestAnimationFrame(loop);
+  }
+  if(reduce){place(0);rain()}else requestAnimationFrame(loop);
+
+  // ---------- редкие события ----------
+  function openHole(){
+    var w=70,x=START+140+Math.random()*Math.max(60,lane()-280),h=document.createElement('div');h.className='hole';h.style.left=x+'px';h.style.width=w+'px';
+    wk.insertBefore(h,wk.firstChild);hole={x:x,w:w,open:false,el:h};
+    requestAnimationFrame(function(){h.classList.add('open');setTimeout(function(){if(hole)hole.open=true},250)});
+    setTimeout(function(){if(!hole)return;hole.open=false;h.classList.remove('open');
+      st.forEach(function(s){if(s.gone||s.fall){s.gone=false;s.fall=false;s.y=30;s.rise=true}});
+      setTimeout(function(){h.remove();hole=null},400)},6500);
+  }
+  function spawnGuest(name,say,speedK,scale){
+    scale=scale||4;var d=document.createElement('div');d.className='walker'+(name==='coin'?' roll':'');d.appendChild(spriteEl(name,scale));
+    if(say){var sp=document.createElement('span');sp.className='say';sp.style.cssText='opacity:1;animation:none';sp.textContent=say;d.appendChild(sp)}
+    d.style.opacity=0;wk.appendChild(d);var w=sheet(name,scale).cw;guests.push({el:d,x:START-w/2,w:w,v:SPEED*speedK});
+  }
+  function glitch(){wk.classList.add('glitchy');setTimeout(function(){wk.classList.remove('glitchy')},900)}
+  if(!reduce)setInterval(function(){
+    if(document.hidden||document.body.classList.contains('plain'))return;
+    var r=Math.random();
+    if(r<.14&&!hole)openHole();
+    else if(r<.26)spawnGuest('coin','',2.2);
+    else if(r<.30)spawnGuest('goldsafe','★ легендарный сейф',1.6);
+    else if(r<.38)glitch();
+  },10000);
+  window.parade={hole:openHole,guest:function(){spawnGuest('coin','',2.2)},gold:function(){spawnGuest('goldsafe','★ легендарный сейф',1.6)},glitch:glitch};
+
+  // ---------- вид ----------
+  var plain=store('plain')==='1',demo=false;
+  function setView(){document.body.classList.toggle('plain',plain);$('viewBtn').setAttribute('aria-pressed',plain);
+    $('viewBtn').textContent=plain?'Режим терминала':'ОФИЦИАЛЬНЫЙ ВИД';$('lawBtn').textContent=plain?'Справочник нормативов':'СПРАВОЧНИК';
+    $('demoBtn').textContent=plain?'Демо-режим':'ДЕМО';$('go').textContent=plain?'Проверить запись':'Запустить анализ'}
+  $('viewBtn').onclick=function(){plain=!plain;store('plain',plain?'1':'0');setView()};
+  $('demoBtn').onclick=function(){demo=!demo;this.setAttribute('aria-pressed',demo);updateGo()};
+  setView();
+
+  // ---------- ключ и сервер ----------
+  $('key').value=store('apiKey')||'';
+  $('key').oninput=function(){store('apiKey',this.value);updateGo()};
+  var hl=$('health'),hlt=hl.lastElementChild;
+  fetch('/health').then(function(r){if(!r.ok)throw 0;hl.className='status on';hlt.textContent='сервер online'})
+    .catch(function(){hl.className='status off';hlt.textContent='сервер offline'});
+
+  // ---------- журнал-терминал ----------
+  var term=$('term');
+  function log(text,cls){var d=document.createElement('div');d.className='ln'+(cls?' '+cls:'');d.textContent=text;term.appendChild(d);term.scrollTop=term.scrollHeight}
+  function clearLog(){term.textContent=''}
+
+  // ---------- файл и экран ----------
+  var file=null,objUrl=null,player=$('player');
+  function fmt(s){s=Number(s)||0;var m=Math.floor(s/60),sec=s-m*60;return m+':'+(sec<10?'0':'')+sec.toFixed(1)}
+  function pickFile(f){
+    file=f||null;if(!file)return;
+    if(objUrl)URL.revokeObjectURL(objUrl);objUrl=URL.createObjectURL(file);
+    player.src=objUrl;player.hidden=false;$('drop').hidden=true;$('osdL').hidden=false;$('osdR').hidden=false;
+    $('camLabel').textContent=file.name;$('fname').textContent=(file.size/1048576).toFixed(1)+' МБ · анализ до 5 минут · двойной клик по экрану — сменить файл';
+    clearLog();log('запись загружена: '+file.name,'ok');log('нажмите «запустить анализ»');updateGo();
+  }
+  $('file').onchange=function(){pickFile(this.files[0])};
+  var screen=$('screen');
+  ['dragenter','dragover'].forEach(function(ev){screen.addEventListener(ev,function(e){e.preventDefault();$('drop').classList.add('over')})});
+  ['dragleave','drop'].forEach(function(ev){screen.addEventListener(ev,function(e){e.preventDefault();$('drop').classList.remove('over')})});
+  screen.addEventListener('drop',function(e){if(e.dataTransfer.files[0])pickFile(e.dataTransfer.files[0])});
+  player.addEventListener('dblclick',function(){if(!busy)$('file').click()});
+  player.addEventListener('loadedmetadata',function(){$('dur').textContent=fmt(player.duration);$('tlEnd').textContent=fmt(player.duration);if(lastJob)drawTimeline(lastJob)});
+  player.addEventListener('timeupdate',function(){$('osdR').textContent=fmt(player.currentTime);
+    if(isFinite(player.duration))$('phHead').style.left=(player.currentTime/player.duration*100)+'%'});
+  $('timeline').addEventListener('click',function(e){if(e.target!==this||!isFinite(player.duration))return;var r=this.getBoundingClientRect();player.currentTime=(e.clientX-r.left)/r.width*player.duration});
+  var alertTimer=null;
+  function seek(t,i){
+    if(!player.hidden){player.currentTime=Math.max(0,Number(t)||0);try{player.pause()}catch(e){}}mark(i);
+    var it=lastJob?sorted(lastJob)[i]:null;if(!it)return;
+    var sc=$('screen');sc.classList.remove('alarm');void sc.offsetWidth;sc.classList.add('alarm');
+    var a=$('alert');a.innerHTML='';a.appendChild(document.createTextNode('⚠ НАРУШЕНИЕ #'+(i+1)));
+    var sm=document.createElement('small');sm.textContent=(it.type||'')+' · '+fmt(it.timecode_sec);a.appendChild(sm);
+    a.classList.add('show');clearTimeout(alertTimer);alertTimer=setTimeout(function(){a.classList.remove('show');sc.classList.remove('alarm')},2600);
+    if(innerWidth<900)sc.scrollIntoView({block:'center',behavior:'smooth'});
+  }
+  function mark(i){[].forEach.call(document.querySelectorAll('.tick,.entry'),function(el){el.classList.toggle('active',el.dataset.i==String(i))})}
+
+  // ---------- состояние ----------
+  var busy=false,timer=null,t0=0,lastJob=null,lastPct=-1;
+  function updateGo(){$('go').disabled=busy||!(demo||(file&&$('key').value.trim()))}
+  function scanning(on){$('desk').classList.toggle('scanning',on)}
+  function fail(msg){busy=false;clearInterval(timer);clearInterval(progAnim);progEl=null;scanning(false);log('ошибка: '+msg,'e');updateGo()}
+  var progEl=null,shownPct=0,targetPct=0,progAnim=null;
+  function progStart(){progEl=document.createElement('div');progEl.className='ln progline';term.appendChild(progEl);shownPct=0;targetPct=1;
+    clearInterval(progAnim);progAnim=setInterval(function(){if(shownPct<targetPct){shownPct++;drawProg()}},40)}
+  function drawProg(){if(!progEl)return;var n=Math.round(shownPct/5),bar=new Array(n+1).join('█')+new Array(21-n).join('░');
+    progEl.innerHTML='';progEl.appendChild(document.createTextNode('анализ кадров ['));var s=document.createElement('span');s.className='pb';s.textContent=bar;progEl.appendChild(s);
+    progEl.appendChild(document.createTextNode('] '+shownPct+'%'));term.scrollTop=term.scrollHeight}
+  function progSet(p){targetPct=Math.max(targetPct,Math.min(100,Math.round(p)))}
+  function progDone(cb){progSet(100);var w=setInterval(function(){if(shownPct>=100){clearInterval(w);clearInterval(progAnim);progEl=null;cb()}},40)}
+  // реального процента сервер не сообщает — оценка по времени: быстро в начале, медленнее к концу, 99% до ответа
+  function tick(){var s=(Date.now()-t0)/1000;progSet(Math.min(99,99*(1-Math.exp(-s/70))))}
+
+  function frameList(it){
+    var raw=it.evidence_frames||it.frames||[];
+    return raw.map(function(f){if(typeof f==='string')return {src:f,t:null};return {src:f.image_base64||f.image||'',t:f.timestamp_sec!=null?f.timestamp_sec:null}})
+      .filter(function(f){return f.src}).map(function(f){f.src=f.src.indexOf('data:')===0?f.src:'data:image/jpeg;base64,'+f.src;return f});
+  }
+  function ruleText(r){if(!r)return '';if(typeof r==='string')return r;var s=r.document||'';if(r.clause)s+=', '+r.clause;return s}
+  function sorted(job){return (job.violations||[]).slice().sort(function(a,b){return a.timecode_sec-b.timecode_sec})}
+
+  var tip=null;
+  function showTip(it,i,b){hideTip();tip=document.createElement('div');tip.className='tip';
+    var fr=frameList(it);if(fr.length){var im=document.createElement('img');im.src=fr[0].src;im.alt='';tip.appendChild(im)}
+    var bb=document.createElement('b');bb.textContent='#'+(i+1)+' '+fmt(it.timecode_sec)+' ';tip.appendChild(bb);tip.appendChild(document.createTextNode(it.type||''));
+    var wrap=$('timeline').parentNode,wr=wrap.getBoundingClientRect(),br=b.getBoundingClientRect();
+    var x=Math.max(100,Math.min(wr.width-100,br.left-wr.left+br.width/2));tip.style.left=x+'px';wrap.appendChild(tip)}
+  function hideTip(){if(tip){tip.remove();tip=null}}
+  function drawTimeline(job){
+    var list=sorted(job),tl=$('timeline');
+    [].slice.call(tl.querySelectorAll('.tick')).forEach(function(n){n.remove()});
+    var dur=isFinite(player.duration)&&player.duration>0?player.duration:Math.max(10,list.reduce(function(m,v){return Math.max(m,Number(v.timecode_sec)||0)},0)*1.15);
+    $('tlEnd').textContent=fmt(dur);
+    list.forEach(function(it,i){var b=document.createElement('button');b.type='button';b.className='tick';b.dataset.n=i+1;b.dataset.i=i;
+      b.style.left=Math.min(100,(Number(it.timecode_sec)||0)/dur*100)+'%';b.title=(i+1)+'. '+(it.type||'')+' — '+fmt(it.timecode_sec);
+      b.onclick=function(){seek(it.timecode_sec,i)};
+      b.onmouseenter=b.onfocus=function(){showTip(it,i,b)};b.onmouseleave=b.onblur=hideTip;
+      tl.appendChild(b)});
+  }
+
+  function render(job){
+    if(progEl){return progDone(function(){render(job)})}
+    lastJob=job;scanning(false);
+    var list=sorted(job),bad=job.verdict==='violation'||list.length>0;
+    log('анализ завершён за '+Math.round((Date.now()-t0)/1000)+' с','ok');
+    log(bad?'найдено нарушений: '+list.length:'нарушений не найдено',bad?'w':'ok');
+    var vb=$('verdictBox');vb.hidden=false;vb.className='verdict '+(bad?'bad':'ok');
+    $('vbig').innerHTML=bad?'<span class="tm">[!] ИНЦИДЕНТ</span><span class="op">Выявлены признаки нарушений</span>':'<span class="tm">[✓] ЧИСТО</span><span class="op">Нарушений не выявлено</span>';
+    $('vtext').textContent=bad?'Обнаружены признаки возможных нарушений: '+list.length:'Нарушение не обнаружено';
+    drawTimeline(job);
+    var box=$('entries');box.innerHTML='';
+    if(!list.length)box.innerHTML='<div class="idle">Записей в журнале нет.</div>';
+    list.forEach(function(it,i){
+      var e=document.createElement('article');e.className='entry';e.dataset.i=i;e.tabIndex=0;
+      var top=document.createElement('div');top.className='top';
+      var l=document.createElement('span');var n=document.createElement('span');n.className='n';n.textContent='#'+(i+1)+' ';var t=document.createElement('span');t.className='t';t.textContent=it.type||'Нарушение';l.appendChild(n);l.appendChild(t);
+      var tc=document.createElement('span');tc.className='tc';tc.textContent='▶ '+fmt(it.timecode_sec);
+      top.appendChild(l);top.appendChild(tc);e.appendChild(top);
+      if(it.description){var d=document.createElement('p');d.textContent=it.description;e.appendChild(d)}
+      var rt=ruleText(it.rule||it.regulation);
+      if(rt&&(it.description||'').indexOf(rt)===-1){var r=document.createElement('div');r.className='rule';r.textContent='норматив: '+rt;e.appendChild(r)}
+      var lk=lawKind(it);if(lk){var lb=document.createElement('button');lb.type='button';lb.className='lawlink';lb.textContent='📖 норматив и примеры';
+        lb.onclick=function(ev){ev.stopPropagation();openLaw(lk)};e.appendChild(lb)}
+      var fr=frameList(it);
+      if(fr.length){var fb=document.createElement('div');fb.className='frames';
+        fr.slice(0,3).forEach(function(f,k){var im=document.createElement('img');im.src=f.src;im.alt='Кадр-доказательство '+(k+1)+(f.t!=null?' на '+fmt(f.t):'');
+          im.onclick=function(ev){ev.stopPropagation();$('zoomImg').src=f.src;try{$('zoom').showModal()}catch(x){}};fb.appendChild(im)});
+        e.appendChild(fb)}
+      e.onclick=function(){seek(it.timecode_sec,i)};
+      e.onkeydown=function(ev){if(ev.key==='Enter')seek(it.timecode_sec,i)};
+      box.appendChild(e);
+    });
+    $('rawBox').hidden=false;
+    $('raw').textContent=JSON.stringify(job,function(k,val){return typeof val==='string'&&val.length>200?val.slice(0,40)+'… ('+val.length+' символов)':val},2);
+    busy=false;clearInterval(timer);updateGo();
+  }
+  $('zoom').onclick=function(){this.close()};
+
+  function demoJob(){
+    var c=document.createElement('canvas');c.width=320;c.height=180;var x=c.getContext('2d');
+    x.fillStyle='#111';x.fillRect(0,0,320,180);x.fillStyle='#5a4a38';x.fillRect(40,60,240,90);
+    x.fillStyle='#d9d2b0';x.fillRect(120,90,60,30);x.strokeStyle='#ff4f5e';x.lineWidth=3;x.strokeRect(110,80,80,50);
+    x.fillStyle='#2bff88';x.font='12px monospace';x.fillText('ДЕМО-КАДР',8,16);
+    var f=c.toDataURL('image/jpeg',.8).split(',')[1];
+    return {job_id:'demo',status:'done',verdict:'violation',violations:[
+      {kind:'valuables_left',type:'Ценности оставлены без присмотра',timecode_sec:9,description:'Демо: кассир покидает кассу, оставив на столе наличные. Норматив: Правила № 231, п. 20.',evidence_frames:[{timestamp_sec:9,image_base64:f}]},
+      {kind:'door_open',type:'Дверь кассы открыта',timecode_sec:21.5,description:'Демо: кассир находится в кассе, дверь не закрыта. Норматив: Правила № 14, п. 8.',evidence_frames:[{timestamp_sec:21.5,image_base64:f}]}]};
+  }
+
+  $('go').onclick=function(){
+    busy=true;updateGo();scanning(true);lastPct=-1;
+    $('verdictBox').hidden=true;$('rawBox').hidden=true;$('entries').innerHTML='';
+    [].slice.call($('timeline').querySelectorAll('.tick')).forEach(function(n){n.remove()});
+    t0=Date.now();clearLog();log('инициализация…');
+    clearInterval(timer);timer=setInterval(tick,1000);
+    if(demo){log('демо-режим: сервер не вызывается','w');progStart();var dp=0,iv=setInterval(function(){dp+=4;progSet(dp);if(dp>=100){clearInterval(iv);render(demoJob())}},80);return}
+    log('отправка записи на сервер…');
+    var key=$('key').value.trim(),fd=new FormData();fd.append('file',file);
+    fetch('/api/v1/analyze',{method:'POST',headers:{'X-API-Key':key},body:fd})
+      .then(function(r){return r.text().then(function(t){
+        if(r.status===401||r.status===403)throw new Error('неверный API-ключ — проверьте поле KEY');
+        if(!r.ok)throw new Error('сервер вернул '+r.status+': '+t);
+        return JSON.parse(t)})})
+      .then(function(j){if(!j.job_id)throw new Error('в ответе нет job_id');$('jobId').textContent='job: '+j.job_id;log('задача создана: '+j.job_id,'ok');progStart();poll(j.job_id,key)})
+      .catch(function(e){fail(e.message||String(e))});
+  };
+  function poll(id,key){
+    if(Date.now()-t0>6*60*1000)return fail('анализ идёт дольше 6 минут — проверьте логи сервера');
+    fetch('/api/v1/jobs/'+encodeURIComponent(id),{headers:{'X-API-Key':key}})
+      .then(function(r){if(!r.ok)throw new Error('статус задачи: ошибка '+r.status);return r.json()})
+      .then(function(j){
+        if(j.status==='done')return render(j);
+        if(j.status==='failed')return fail('анализ не удался: '+(j.error||j.detail||'причина не указана'));
+        setTimeout(function(){poll(id,key)},2000);
+      })
+      .catch(function(e){fail(e.message||String(e))});
+  }
+  // ---------- глитч-заставка ----------
+  (function(){
+    var h=$('title'),fin=h.dataset.text,GL='#%&@$01ДЖЯ₸?/<>*';
+    if(reduce){h.textContent=fin;return}
+    var n=0,iv=setInterval(function(){
+      var s='';for(var k=0;k<fin.length;k++)s+=(k<n/2||fin[k]==='/')?fin[k]:GL[Math.random()*GL.length|0];
+      h.textContent=s;n++;if(n>fin.length*2){clearInterval(iv);h.textContent=fin;h.classList.add('glitch');
+        setTimeout(function(){h.classList.remove('glitch')},800);
+        setInterval(function(){h.classList.add('glitch');setTimeout(function(){h.classList.remove('glitch')},750)},9000);
+        var c=document.querySelector('.brand .cur');if(c){c.style.display='';h.appendChild(c)}}
+    },35);
+  })();
+
+  // ---------- справочник нормативов ----------
+  var DOCS={
+    r231:{t:'Правила осуществления кассовых операций и операций по инкассации банкнот, монет и ценностей (постановление Правления НБРК от 29.11.2019 № 231)',u:'https://adilet.zan.kz/rus/docs/V1900019680'},
+    r14:{t:'Правила организации охраны и устройства помещений банков второго уровня (постановление Правления НБРК от 24.02.2020 № 14)',u:'https://adilet.zan.kz/rus/docs/V2000020075'},
+    rib:{t:'Требования к обеспечению информационной безопасности банков (постановление Правления АРРФР от 03.04.2026 № 53)',u:'https://adilet.zan.kz/rus/docs/V2600038336'}
+  };
+  // q — дословная выдержка (сверена), p — краткий пересказ
+  var CL={
+    'r231|п. 12':{q:'Хранение личных вещей, наличных денег и ценностей работников банка осуществляется вне кассового узла',p:'В кассовый узел допускается вносить лекарства, медицинские изделия и средства связи без функций фото- и видеофиксации.'},
+    'r231|п. 20':{q:'Наличные деньги принимаются и пересчитываются кассовым работником в присутствии клиента. … Все ранее принятые наличные деньги хранятся в специальных устройствах, находящихся на рабочем месте кассового работника, закрывающихся на ключ, предназначенных для хранения наличных денег (металлический шкаф, сейф, тележка, ящики стола, тумба).'},
+    'r231|п. 24':{q:'проверяет целостность сумки; … проверяет правильность пломбирования сумки.',p:'Сумка с наличными принимается кассовым работником по препроводительному (сопроводительному) документу.'},
+    'r231|п. 25':{q:'вскрывает и пересчитывает находящиеся в них наличные деньги',p:'Вскрытие сумки и пересчёт наличных проводятся в присутствии работника подразделения инкассации; при недостаче или излишке составляется акт.'},
+    'r231|п. 31':{q:'пересчитывает подготовленные к выдаче наличные деньги в присутствии клиента, выдает клиенту наличные деньги',p:'Выдаются наличные, подготовленные к выдаче (полученные кассиром для выдачи), а не взятые из принимаемой пачки.'},
+    'r231|п. 43':{q:'Банкноты сортируются по номиналам, на годные к обращению, ветхие, изъятые и (или) изымаемые из обращения.'},
+    'r231|пп. 57–58':{p:'Порядок проверки платежности и подлинности наличных денег; на эти пункты ссылается п. 36 Правил. Полный текст — на adilet.'},
+    'r231|п. 76':{p:'Ключи и коды от замков хранятся у лиц, ответственных за сохранность наличных денег (пункт относится к кладовой и сейфовой комнате).'},
+    'r231|п. 77':{q:'Наличные деньги в кладовой и (или) сейфовой комнате хранятся раздельно по виду валюты',p:'а также раздельно по номиналам — в металлических шкафах, стеллажах, сейфах, тележках.'},
+    'r231|п. 80':{q:'определяется внутренними документами банка, обеспечивающими исключение их несанкционированного использования',p:'Речь о порядке хранения пломбираторов, клише, именных штампов и ключей.'},
+    'r231|':{p:'Прямого пункта о параллельном обслуживании нет; по смыслу п. 20 приём и пересчёт ведутся с одним клиентом и в его присутствии. Ссылка дана на документ без пункта — это допускается ТЗ.'},
+    'r14|п. 8':{q:'одним закрывающимся служебным входом',p:'Кассовый узел должен быть изолирован и иметь один закрывающийся служебный вход.'},
+    'r14|п. 16 пп. 1':{q:'каждая касса имеет отдельный вход с закрывающейся на замок дверью;'},
+    'rib|п. 71 пп. 9':{q:'при неактивности пользователя более 30 (тридцати) минут информационная система автоматически завершает сеанс',p:'На видео кассир уходит сразу, 30 минут не проходит, поэтому ссылка дана на документ в целом: требование о защите от несанкционированного доступа к рабочему месту.'}
+  };
+  var LAW={
+    valuables_left:{type:'Ценности оставлены без присмотра',why:'Уходя из кассы, кассир должен убрать в сейф всё ценное: наличные, опломбированные пакеты, документы, штампы — и забрать ключ.',
+      bad:['Кассир забирает ключ от сейфа и уходит, а пачка денег остаётся на столе','Уходит, оставив на столе опломбированный пакет','Уходит, оставив папку с документами и штампы'],
+      ok:['Деньги убраны в сейф, сейф закрыт, ключ забран','Деньги на столе, но кассир рядом и работает с ними — это не нарушение'],
+      see:'На кадре: в кассе никого нет, а на столе лежат деньги, пакет или штампы.',refs:[['r231','п. 20'],['r231','п. 80']]},
+    prev_client_money:{type:'Деньги предыдущего клиента не убраны',why:'Деньги каждого клиента должны быть убраны до начала работы со следующим, чтобы не смешивать операции.',
+      bad:['Деньги первого клиента лежат на столе, кассир начинает пересчёт денег второго','Деньги второго клиента кладутся в одну стопку с деньгами первого'],
+      ok:['Деньги первого клиента убраны в сейф до прихода второго'],see:'У кассы новый клиент, а на столе остались деньги прошлого.',refs:[['r231','п. 20']]},
+    door_open:{type:'Дверь кассы открыта',why:'Касса — изолированное помещение с закрывающимся входом. Открытая дверь позволяет постороннему войти или заглянуть.',
+      bad:['Кассир заходит и не закрывает дверь, за ней входит клиент','Дверь открыта, посторонний заглядывает в проём','Дверь просто остаётся открытой'],
+      ok:['Дверь закрыта, даже если не заперта на ключ — это не нарушение'],see:'Кассир внутри, дверь кассового помещения открыта.',refs:[['r14','п. 8'],['r14','п. 16 пп. 1']]},
+    app_left_open:{type:'Рабочее приложение оставлено открытым',why:'Уходя, кассир должен закрыть рабочее приложение или заблокировать компьютер, чтобы к системе никто не получил доступ.',
+      bad:['Кассир уходит, на ноутбуке открыто рабочее приложение'],ok:['Экран горит, но приложение закрыто — не нарушение','Ноутбук закрыт или экран выключен'],
+      see:'В кассе никого, на экране открыто окно программы.',refs:[['rib','п. 71 пп. 9']]},
+    safe_open:{type:'Сейф оставлен открытым',why:'Наличные хранятся в устройстве, закрывающемся на ключ. Открытый сейф эту защиту не обеспечивает.',
+      bad:['Кассир достаёт деньги и оставляет дверцу сейфа открытой, пока считает'],ok:['Кассир достаёт деньги и сразу закрывает сейф'],see:'Дверца сейфа открыта, кассир работает с деньгами.',refs:[['r231','п. 20']]},
+    key_in_safe:{type:'Ключ оставлен в замке сейфа',why:'Ключ от сейфа хранится у ответственного лица. Ключ в замке сводит защиту сейфа на нет.',
+      bad:['Кассир закрывает сейф, оставляет ключ в замке и уходит'],ok:['Кассир закрывает сейф и забирает ключ с собой'],see:'Сейф закрыт, в замке торчит ключ, кассира нет.',refs:[['r231','п. 20'],['r231','п. 76']]},
+    count_without_client:{type:'Пересчёт денег без клиента',why:'Деньги принимаются и пересчитываются в присутствии клиента — так исключаются споры о сумме.',
+      bad:['Клиент уходит, не дождавшись окончания пересчёта'],ok:['Клиент остаётся до конца пересчёта и уходит после того, как деньги убраны'],see:'Клиент ушёл, а деньги ещё в машине или на столе.',refs:[['r231','п. 20']]},
+    parallel_service:{type:'Параллельное обслуживание двух посетителей',why:'Операция ведётся с одним клиентом. Пока она не завершена, кассир не начинает обслуживать следующего.',
+      bad:['Пока идёт пересчёт денег первого клиента, кассир берёт документы у второго'],ok:['Первый клиент закончил и ушёл, только потом подходит второй'],see:'У кассы два посетителя одновременно, операция с первым не завершена.',refs:[['r231','']]},
+    bag_without_docs:{type:'Пакет принят без сопроводительных документов',why:'Опломбированная сумка принимается по сопроводительному документу с проверкой целостности и пломбы.',
+      bad:['Человек передаёт пакет и сразу уходит, документы не передаются'],ok:['Сначала документы → проверка → только потом пакет'],see:'Пакет переходит к кассиру без предшествующей передачи документов.',refs:[['r231','п. 24']]},
+    no_authenticity_check:{type:'Не проведена проверка подлинности купюр',why:'Наличные проверяются на платежность и подлинность, а не только пересчитываются машиной.',
+      bad:['После машины купюры сразу складываются в стопку, без ультрафиолета и ручного пересчёта'],ok:['Машина → проверка под ультрафиолетом → ручной пересчёт','Под ультрафиолетом проверены хотя бы нетипичные купюры'],
+      see:'Деньги из счётной машины уходят в стопку, УФ-лампа не используется.',refs:[['r231','пп. 57–58'],['r231','п. 43']]},
+    bag_to_safe_uncounted:{type:'Деньги из вскрытой упаковки убраны без пересчёта',why:'При вскрытии сумки наличные пересчитываются, после чего хранятся раздельно по номиналам.',
+      bad:['Кассир вскрывает опломбированную упаковку и, не пересчитав, кладёт деньги в сейф одной стопкой'],ok:['Вскрыла упаковку, пересчитала на машине, убрала в сейф по пачкам'],
+      see:'Вскрытая упаковка, деньги идут в сейф мимо счётной машины.',refs:[['r231','п. 25'],['r231','пп. 57–58'],['r231','п. 77']]},
+    personal_items:{type:'Личные вещи на рабочем месте',why:'Личные вещи работников хранятся вне кассового узла, а не на столе, где работают с деньгами.',
+      bad:['Кассир кладёт сумку и куртку на рабочий стол'],ok:['Смартфон в кармане — по разметке не нарушение (см. «Использование телефона при работе с наличными»)'],see:'Сумка, рюкзак или куртка на столе кассира.',refs:[['r231','п. 12']]},
+    food_near_cash:{type:'Еда и напитки рядом с наличными',why:'Пока кассир отвлекается на еду, наличные должны быть убраны в запирающееся устройство.',
+      bad:['Деньги после пересчёта лежат на столе, кассир берёт кофе и мороженое'],ok:['Сначала деньги убраны в сейф'],see:'Стакан или еда на столе рядом с неубранными деньгами.',refs:[['r231','п. 20'],['r231','п. 12']]},
+    phone_during_cash:{type:'Использование телефона при работе с наличными',why:'В кассовый узел допускаются только средства связи без функций фото- и видеофиксации. Пользоваться смартфоном, пока на столе деньги, — риск съёмки и отвлечения.',
+      bad:['Кассир смотрит в экран смартфона, пока на столе лежат пересчитанные деньги','Кассир фотографирует или разговаривает по телефону во время пересчёта'],
+      ok:['Кассир просто убирает телефон в карман — по разметке не нарушение'],see:'Телефон в руках и в активном использовании, рядом деньги или идёт пересчёт.',refs:[['r231','п. 12']]},
+    cash_from_client_stack:{type:'Выдача купюр из пачки клиента',why:'Приём и выдача — разные операции: выдаются деньги, подготовленные к выдаче, а не взятые из принимаемой пачки.',
+      bad:['После пересчёта кассир вынимает 2 купюры из пачки клиента и отдаёт их'],ok:[],see:'Кассир передаёт клиенту купюры из только что пересчитанной пачки.',refs:[['r231','п. 20'],['r231','п. 31']]}
+  };
+  var CLT={'r231|п. 12':'Личные вещи — вне кассового узла','r231|п. 20':'Пересчёт при клиенте; деньги — в запирающемся устройстве',
+    'r231|п. 24':'Приём сумки по сопроводительному документу','r231|п. 25':'Вскрытие сумки и пересчёт наличных','r231|п. 31':'Порядок выдачи наличных клиенту',
+    'r231|п. 43':'Сортировка банкнот','r231|пп. 57–58':'Проверка платежности и подлинности','r231|п. 76':'Хранение ключей','r231|п. 77':'Раздельное хранение по номиналам',
+    'r231|п. 80':'Хранение штампов, клише, пломбираторов','r231|':'Правила № 231 в целом','r14|п. 8':'Изолированный кассовый узел с закрывающимся входом',
+    'r14|п. 16 пп. 1':'Отдельный вход в кассу с запирающейся дверью','rib|п. 71 пп. 9':'Завершение сеанса при неактивности пользователя'};
+  function usedBy(key){return Object.keys(LAW).filter(function(k){return LAW[k].refs.some(function(r){return r[0]+'|'+r[1]===key})})}
+  function shortDoc(d){return d==='r231'?'Правила № 231':d==='r14'?'Правила № 14':'Требования АРРФР № 53'}
+  function openClause(key){
+    var b=$('lawBody');b.innerHTML='';var parts=key.split('|'),d=DOCS[parts[0]],c=CL[key]||{},cl=parts[1];
+    $('lawTitle').textContent='Справочник · '+shortDoc(parts[0])+(cl?', '+cl:'');
+    var back=el('button','lawlink','← все нормативы');back.type='button';back.onclick=function(){openLaw(null,'norms')};b.appendChild(back);
+    b.appendChild(el('h2',null,(cl?cl+'. ':'')+(CLT[key]||'')));b.appendChild(el('div','muted',d.t));
+    var n=el('div','norm');if(c.q)n.appendChild(el('blockquote',null,'«'+c.q+'»'));if(c.p)n.appendChild(el('div','para',c.p));
+    var a=el('a',null,'Полный текст на adilet.zan.kz ↗');a.href=d.u;a.target='_blank';a.rel='noopener';n.appendChild(a);b.appendChild(n);
+    var ks=usedBy(key);
+    if(ks.length){var s=el('div');s.appendChild(el('h4',null,'На этом пункте основаны нарушения'));var l=el('div','law-list');
+      ks.forEach(function(k){var bt=el('button',null,LAW[k].type);bt.type='button';bt.appendChild(el('span','meta',LAW[k].see));bt.onclick=function(){openLaw(k)};l.appendChild(bt)});
+      s.appendChild(l);b.appendChild(s);
+      var ex=el('div');ex.appendChild(el('h4',null,'Как это выглядит на видео — примеры'));var u=el('ul','bad');
+      ks.forEach(function(k){LAW[k].bad.forEach(function(x){u.appendChild(el('li',null,x))})});ex.appendChild(u);b.appendChild(ex);
+      var okl=[];ks.forEach(function(k){okl=okl.concat(LAW[k].ok)});
+      if(okl.length){var ok=el('div');ok.appendChild(el('h4',null,'Что под этот пункт не попадает'));var u2=el('ul','ok');okl.forEach(function(x){u2.appendChild(el('li',null,x))});ok.appendChild(u2);b.appendChild(ok)}
+    }
+    b.appendChild(el('p','muted','Цитаты сверены с текстом на adilet.zan.kz; «Кратко» — пересказ смысла. Результат сервиса — подсказка для проверяющего, а не юридическое заключение.'));
+    try{if(!$('law').open)$('law').showModal()}catch(e){}b.scrollTop=0;
+  }
+  function lawKind(it){if(it.kind&&LAW[it.kind])return it.kind;for(var k in LAW)if(LAW[k].type===it.type)return k;return null}
+  function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
+  function openLaw(kind,tab){
+    var b=$('lawBody');b.innerHTML='';
+    if(!kind||!LAW[kind]){
+      tab=tab||'types';$('lawTitle').textContent='Справочник нарушений и нормативов';
+      var tabs=el('div','law-tabs');[['types','По нарушениям'],['norms','По нормативам']].forEach(function(x){var bt=el('button',null,x[1]);bt.type='button';
+        bt.setAttribute('aria-pressed',tab===x[0]);bt.onclick=function(){openLaw(null,x[0])};tabs.appendChild(bt)});b.appendChild(tabs);
+      var list=el('div','law-list');
+      if(tab==='types'){b.appendChild(el('p',null,'Типы нарушений, которые распознаёт сервис. Выберите тип:'));
+        Object.keys(LAW).forEach(function(k){var bt=el('button',null,LAW[k].type);bt.type='button';bt.appendChild(el('span','meta',LAW[k].refs.map(function(r){return shortDoc(r[0])+(r[1]?', '+r[1]:'')}).join(' · ')));bt.onclick=function(){openLaw(k)};list.appendChild(bt)});
+      }else{b.appendChild(el('p',null,'Нормативные акты Республики Казахстан и пункты, на которых основаны выводы сервиса. Выберите пункт:'));
+        Object.keys(CLT).forEach(function(key){var pr=key.split('|'),bt=el('button',null,shortDoc(pr[0])+(pr[1]?', '+pr[1]:'')+' — '+CLT[key]);bt.type='button';
+          var n=usedBy(key).length;bt.appendChild(el('span','meta',n?'нарушений по этому пункту: '+n:'справочно'));bt.onclick=function(){openClause(key)};list.appendChild(bt)});
+      }
+      b.appendChild(list);
+    }else{
+      var L=LAW[kind];$('lawTitle').textContent='Справочник · '+L.type;
+      var back=el('button','lawlink','← все типы нарушений');back.type='button';back.onclick=function(){openLaw(null)};b.appendChild(back);
+      b.appendChild(el('h2',null,L.type));b.appendChild(el('p',null,L.why));
+      var s1=el('div');s1.appendChild(el('h4',null,'Как выглядит на видео'));s1.appendChild(el('p',null,L.see));b.appendChild(s1);
+      if(L.bad.length){var s2=el('div');s2.appendChild(el('h4',null,'Примеры нарушения (из обучающих роликов)'));var u=el('ul','bad');L.bad.forEach(function(x){u.appendChild(el('li',null,x))});s2.appendChild(u);b.appendChild(s2)}
+      if(L.ok.length){var s3=el('div');s3.appendChild(el('h4',null,'Не является нарушением'));var u2=el('ul','ok');L.ok.forEach(function(x){u2.appendChild(el('li',null,x))});s3.appendChild(u2);b.appendChild(s3)}
+      var s4=el('div');s4.appendChild(el('h4',null,'Нормативная основа'));
+      L.refs.forEach(function(r){var d=DOCS[r[0]],c=CL[r[0]+'|'+r[1]]||{};var n=el('div','norm');
+        n.appendChild(el('div','doc',d.t));var clh=el('div','cl');var clb=el('button',null,(r[1]||'Документ в целом')+(CLT[r[0]+'|'+r[1]]?' — '+CLT[r[0]+'|'+r[1]]:'')+' →');clb.type='button';clb.onclick=function(){openClause(r[0]+'|'+r[1])};clh.appendChild(clb);n.appendChild(clh);
+        if(c.q)n.appendChild(el('blockquote',null,'«'+c.q+'»'));if(c.p)n.appendChild(el('div','para',c.p));
+        var a=el('a',null,'Полный текст на adilet.zan.kz ↗');a.href=d.u;a.target='_blank';a.rel='noopener';n.appendChild(a);s4.appendChild(n)});
+      b.appendChild(s4);
+      b.appendChild(el('p','muted','Цитаты сверены с текстом на adilet.zan.kz. Результат сервиса — подсказка для проверяющего, а не юридическое заключение.'));
+    }
+    try{if(!$('law').open)$('law').showModal()}catch(e){}
+    b.scrollTop=0;
+  }
+  $('lawBtn').onclick=function(){openLaw(null)};
+  $('lawClose').onclick=function(){$('law').close()};
+  $('law').addEventListener('click',function(e){if(e.target===this)this.close()});
+
+  // ---------- живой терминал ----------
+  var HELP=['help        — список команд','scan        — запустить анализ','show N      — перейти к нарушению N','list        — список найденных нарушений',
+            'demo on|off — демо-режим','plain       — переключить вид','clear       — очистить журнал','law         — справочник нормативов','whoami      — кто я'];
+  $('cmdForm').addEventListener('submit',function(e){
+    e.preventDefault();var inp=$('cmd'),raw=inp.value.trim();inp.value='';if(!raw)return;
+    log(raw);var a=raw.toLowerCase().split(/\s+/),c=a[0];
+    if(c==='help'){HELP.forEach(function(l){log(l,'ok')})}
+    else if(c==='clear'){clearLog()}
+    else if(c==='scan'){if($('go').disabled)log('нечего анализировать: загрузите запись'+(demo?'':' или включите demo on'),'w');else $('go').click()}
+    else if(c==='show'){var n=parseInt(a[1],10);var L=lastJob?sorted(lastJob):[];
+      if(!L.length)log('нарушений пока нет','w');else if(!(n>=1&&n<=L.length))log('укажите номер от 1 до '+L.length,'w');else{seek(L[n-1].timecode_sec,n-1);log('переход к #'+n+': '+(L[n-1].type||''),'ok')}}
+    else if(c==='list'){var L2=lastJob?sorted(lastJob):[];if(!L2.length)log('список пуст','w');L2.forEach(function(v,k){log('#'+(k+1)+' '+fmt(v.timecode_sec)+' '+(v.type||''),'ok')})}
+    else if(c==='demo'){var on=a[1]!=='off';if(demo!==on)$('demoBtn').click();log('демо-режим: '+(demo?'вкл':'выкл'),'ok')}
+    else if(c==='plain'){$('viewBtn').click();log('вид переключён','ok')}
+    else if(c==='law'){openLaw(null);log('справочник открыт','ok')}
+    else if(c==='whoami'){log('оператор контроля кассовой дисциплины. доступ: чтение журнала.','ok')}
+    else if(c==='sudo'){log('доступ запрещён. попытка записана в журнал. шутка 🙂','e')}
+    else log('неизвестная команда: '+c+' — введите help','w');
+  });
+
+  updateGo();
+})();
+</script>
+</body>
+</html>
