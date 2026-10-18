@@ -12,16 +12,16 @@
 
 | | |
 |---|---|
-| Веб-интерфейс | `https://<адрес>.trycloudflare.com` *(заполнить перед сдачей)* |
-| API | `https://<адрес>.trycloudflare.com/api/v1` |
+| Веб-интерфейс | `https://diner-skincare-closure.ngrok-free.dev` *(заполнить перед сдачей)* |
+| API | `https://diner-skincare-closure.ngrok-free.dev/api/v1` |
 | API-ключ | передаётся жюри отдельно |
 
 Пример запроса:
 
 ```bash
-curl -X POST https://<адрес>/api/v1/analyze -H "X-API-Key: <ключ>" -F "file=@video_017.mov"
+curl -X POST https://diner-skincare-closure.ngrok-free.dev/api/v1/analyze -H "X-API-Key: <ключ>" -F "file=@video_017.mov"
 # → {"job_id": "3f2a9c1e"}
-curl https://<адрес>/api/v1/jobs/3f2a9c1e -H "X-API-Key: <ключ>"
+curl https://diner-skincare-closure.ngrok-free.dev/api/v1/jobs/3f2a9c1e -H "X-API-Key: <ключ>"
 # → {"job_id": "...", "status": "processing" | "done" | "failed", "verdict": ..., "violations": [...]}
 ```
 
