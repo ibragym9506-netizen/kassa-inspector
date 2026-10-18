@@ -191,30 +191,12 @@ def _apply_rules(samples: List[dict]) -> List[dict]:
     # Два посетителя одновременно (Х-18)
     first("parallel_service", lambda s: s["customers_count"] >= 2 and s["cashier_present"])
 
-    # Деньги предыдущего клиента не убраны (Х-12, Х-13, Х-17): клиент ушёл, пришёл следующий,
-    # а деньги так и лежали на столе всё это время (если их убрали в сейф хоть на одном кадре — норма)
-    for i in range(len(samples)):
-        if samples[i]["customers_count"] < 1:
-            continue
-        j = i + 1
-        while j < len(samples) and samples[j]["customers_count"] >= 1:
-            j += 1
-        if j >= len(samples):
-            break
-        k = j
-        while k < len(samples) and samples[k]["customers_count"] == 0:
-            k += 1
-        if k < len(samples) and all(s["cash_on_desk"] for s in samples[j:k + 1]) \
-                and samples[k]["cashier_present"]:
-            add("prev_client_money", k)
-            break
-
     # Клиент ушёл до конца пересчёта (Х-34): был клиент → клиента нет, кассир на месте, деньги в работе
     for i in range(1, len(samples) - 1):
         a, b, c = samples[i - 1], samples[i], samples[i + 1]
         if a["customers_count"] >= 1 and b["customers_count"] == 0 and c["customers_count"] == 0 \
-                and b["cashier_present"] and b["cashier_handling_cash"] and c["cashier_handling_cash"]:
-            # именно пересчитывает после ухода клиента; просто деньги на столе — не этот тип
+                and b["cashier_present"] and (b["cashier_handling_cash"] or b["cash_on_desk"]) \
+                and (c["cashier_handling_cash"] or c["cash_on_desk"]):
             add("count_without_client", i)
             break
 
